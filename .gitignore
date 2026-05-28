@@ -7,3 +7,5 @@ outputs/
 *.pt
 *.bin
 *.safetensors
+.claude/
+CLAUDE.md
