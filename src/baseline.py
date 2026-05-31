@@ -26,7 +26,7 @@ MAX_INPUT_TOKENS = 1024     # BART encoder limit
 CHUNK_OVERLAP = 100          # token overlap between chunks
 MAX_OUTPUT_TOKENS = 200      # per-chunk summary length
 FINAL_MAX_OUTPUT = 512       # final summary max length
-NUM_SAMPLES = 10
+NUM_SAMPLES = 20
 BATCH_SIZE = 2
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
