@@ -1,0 +1,81 @@
+# NLP Factual Summary — Master Configuration
+# ============================================
+# Usage:
+#   python main.py --mode test    # 5 samples, fast validation
+#   python main.py --mode full    # 500+ samples, final experiment
+
+mode: test
+use_gpu: true
+
+defaults:
+  seed: 42
+  device: auto
+  dataset:
+    name: ccdv/govreport-summarization
+    split: validation
+    cache_dir: ./data_cache
+
+  summarizer:
+    model: Qwen/Qwen2.5-1.5B-Instruct
+    chunk_size: 2000
+    chunk_overlap: 200
+    max_summary_length: 300
+    max_chunk_summary_length: 150
+    num_beams: 4
+
+  consistency:
+    nli_model: facebook/bart-large-mnli
+    entailment_threshold: 0.5
+    evidence_top_k: 3
+    sentence_window: 3
+    evidence_mode: word_overlap          # "word_overlap" or "semantic"
+
+  semantic_retrieval:
+    model: all-MiniLM-L6-v2
+    batch_size: 32
+
+  corrector:
+    model: Qwen/Qwen2.5-1.5B-Instruct
+    max_new_tokens: 100
+    temperature: 0.0
+    num_beams: 3
+    max_length_ratio: 2.0                # reject if corrected > 2x original length
+
+  evaluation:
+    rouge_types: [rouge1, rouge2, rougeL]
+    use_stemmer: true
+
+  analysis:
+    length_bins:
+      - [0, 100]
+      - [100, 200]
+      - [200, 300]
+      - [300, 400]
+      - [400, 500]
+      - [500, 99999]
+    num_case_studies: 10
+
+  output:
+    root_dir: ./results
+    save_intermediate: true
+
+  logging:
+    level: INFO
+
+# ── Test profile (fast development runs) ──────────────────────────
+test:
+  num_samples: 2
+  summarizer:
+    chunk_size: 800
+    max_summary_length: 150
+    num_beams: 1
+  corrector:
+    num_beams: 1
+
+# ── Full profile (final experiment) ───────────────────────────────
+full:
+  num_samples: 500
+  consistency:
+    evidence_mode: word_overlap     # change to "semantic" for 进阶任务
+  semantic_retrieval:
+    enabled: false                  # set to true for 进阶任务
