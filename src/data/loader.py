@@ -12,8 +12,10 @@ logger = logging.getLogger(__name__)
 class GovReportDataLoader:
     """Loads ccdv/govreport-summarization with optional sample limit and shuffle."""
 
-    def __init__(self, dataset_name: str = "ccdv/govreport-summarization"):
+    def __init__(self, dataset_name: str = "ccdv/govreport-summarization",
+                 cache_dir: Optional[str] = None):
         self.dataset_name = dataset_name
+        self.cache_dir = cache_dir
         # Ensure nltk sentence tokenizer is available
         try:
             nltk.data.find("tokenizers/punkt_tab")
@@ -35,6 +37,7 @@ class GovReportDataLoader:
         dataset = load_dataset(
             self.dataset_name,
             split=split,
+            cache_dir=self.cache_dir,
         )
 
         # Deterministic shuffle so test mode sees the same samples every run
