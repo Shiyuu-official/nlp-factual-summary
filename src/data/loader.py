@@ -4,7 +4,6 @@ import logging
 from typing import List, Dict, Optional
 
 from datasets import load_dataset
-import nltk
 
 logger = logging.getLogger(__name__)
 
@@ -14,15 +13,6 @@ class GovReportDataLoader:
 
     def __init__(self, dataset_name: str = "ccdv/govreport-summarization"):
         self.dataset_name = dataset_name
-        # Ensure nltk sentence tokenizer is available
-        try:
-            nltk.data.find("tokenizers/punkt_tab")
-        except LookupError:
-            nltk.download("punkt_tab", quiet=True)
-        try:
-            nltk.data.find("tokenizers/punkt")
-        except LookupError:
-            nltk.download("punkt", quiet=True)
 
     def load(self, split: str = "validation", max_samples: Optional[int] = None,
              seed: int = 42) -> List[Dict]:

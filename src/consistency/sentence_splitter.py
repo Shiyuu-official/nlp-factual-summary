@@ -20,14 +20,22 @@ class SentenceSplitter:
     def _ensure_ready(self):
         if self._ready:
             return
-        try:
-            nltk.data.find("tokenizers/punkt_tab")
-        except LookupError:
-            nltk.download("punkt_tab", quiet=True)
-        try:
-            nltk.data.find("tokenizers/punkt")
-        except LookupError:
-            nltk.download("punkt", quiet=True)
+        # Try punkt_tab first (newer nltk), then punkt (older)
+        for resource in ("tokenizers/punkt_tab", "tokenizers/punkt"):
+            try:
+                nltk.data.find(resource)
+            except LookupError:
+                logger.info(f"NLTK {resource} not found, downloading...")
+                try:
+                    nltk.download(resource.split("/")[-1], quiet=True, raise_on_error=True)
+                except Exception as e:
+                    logger.warning(f"NLTK download failed ({e}). "
+                                   "If you are behind a firewall, set NLTK_DATA manually "
+                                   "or run: python -m nltk.downloader punkt")
+                    raise RuntimeError(
+                        f"NLTK '{resource}' is missing and auto-download failed. "
+                        f"Download it manually: python -m nltk.downloader punkt"
+                    ) from e
         self._ready = True
 
     def split(self, text: str) -> List[str]:
