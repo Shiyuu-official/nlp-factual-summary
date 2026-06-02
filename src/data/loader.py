@@ -1,6 +1,7 @@
 """GovReport dataset loader."""
 
 import logging
+import os
 from typing import List, Dict, Optional
 
 from datasets import load_dataset
@@ -32,9 +33,13 @@ class GovReportDataLoader:
         """
         logger.info(f"Loading {self.dataset_name} ({split} split)...")
 
+        # Use cache directory from environment variable
+        cache_dir = os.environ.get("DATASETS_CACHE", "./data_cache")
+
         dataset = load_dataset(
             self.dataset_name,
             split=split,
+            cache_dir=cache_dir,
         )
 
         # Deterministic shuffle so test mode sees the same samples every run

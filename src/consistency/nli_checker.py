@@ -8,18 +8,16 @@ Checks each summary sentence against the source document:
 """
 
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from tqdm import tqdm
 
 from .sentence_splitter import SentenceSplitter
-from .evidence_retrieval import BaseEvidenceRetriever, Evidence
+from .evidence_retrieval import BaseEvidenceRetriever
 
 logger = logging.getLogger(__name__)
-
-NLI_LABELS = ["entailment", "neutral", "contradiction"]
 
 
 class NLIChecker:
@@ -27,9 +25,11 @@ class NLIChecker:
 
     def __init__(self, model_name: str = "facebook/bart-large-mnli",
                  entailment_threshold: float = 0.5,
+                 evidence_top_k: int = 3,
                  device: str = "cpu"):
         self.model_name = model_name
         self.entailment_threshold = entailment_threshold
+        self.evidence_top_k = evidence_top_k
         self.device = device
 
         logger.info(f"Loading NLI model {model_name} on {device}...")
@@ -39,7 +39,21 @@ class NLIChecker:
             torch_dtype=torch.float16 if device == "cuda" else torch.float32,
         ).to(device)
         self.model.eval()
+        self.id2label = {
+            int(idx): label.lower()
+            for idx, label in self.model.config.id2label.items()
+        }
+        self.entailment_label_id = self._find_label_id("entailment")
         logger.info("NLI model loaded.")
+
+    def _find_label_id(self, target: str) -> int:
+        """Find a label id from model metadata instead of assuming fixed order."""
+        for idx, label in self.id2label.items():
+            if target in label:
+                return idx
+        raise ValueError(
+            f"Cannot find '{target}' label in {self.model_name} labels: {self.id2label}"
+        )
 
     def _check_entailment(self, premise: str, hypothesis: str) -> Dict:
         """Run NLI on a single (premise, hypothesis) pair.
@@ -58,12 +72,16 @@ class NLIChecker:
             outputs = self.model(**inputs)
             probs = torch.softmax(outputs.logits, dim=-1)[0]
 
-        scores = {label: probs[i].item() for i, label in enumerate(NLI_LABELS)}
-        predicted = NLI_LABELS[torch.argmax(probs).item()]
+        scores = {
+            self.id2label.get(i, f"label_{i}"): probs[i].item()
+            for i in range(len(probs))
+        }
+        predicted_id = torch.argmax(probs).item()
+        predicted = self.id2label.get(predicted_id, f"label_{predicted_id}")
 
         return {
             "label": predicted,
-            "entailment_score": scores["entailment"],
+            "entailment_score": probs[self.entailment_label_id].item(),
             "scores": scores,
         }
 
@@ -76,7 +94,7 @@ class NLIChecker:
         evidences, nli_per_evidence
         """
         evidences = retriever.retrieve(
-            sentence, document_sentences, top_k=3,
+            sentence, document_sentences, top_k=self.evidence_top_k,
         )
 
         if not evidences:

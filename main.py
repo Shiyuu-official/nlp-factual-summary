@@ -10,9 +10,18 @@ Usage:
 import os
 import argparse
 
+# Set cache directories for GPU server (bayes-tmp)
+cache_dir = os.environ.get("PROJECT_CACHE_DIR", "/root/bayes-tmp/cache")
+os.makedirs(cache_dir, exist_ok=True)
+
 # Use HF mirror for model downloads (required in mainland China due to SSL proxy issues)
 if not os.environ.get("HF_ENDPOINT"):
     os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+# Set cache directories
+os.environ["TRANSFORMERS_CACHE"] = os.path.join(cache_dir, "models")
+os.environ["HF_HOME"] = os.path.join(cache_dir, "huggingface")
+os.environ["DATASETS_CACHE"] = os.path.join(cache_dir, "datasets")
 
 from src.utils.config import load_config
 from src.pipeline import Pipeline

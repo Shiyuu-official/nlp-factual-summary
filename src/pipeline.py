@@ -61,6 +61,7 @@ class Pipeline:
 
         loader = GovReportDataLoader(
             dataset_name=self.config.dataset_name,
+            cache_dir=self.config.dataset_cache_dir,
         )
         samples = loader.load(
             split=self.config.dataset_split,
@@ -129,6 +130,7 @@ class Pipeline:
         checker = NLIChecker(
             model_name=self.config.consistency_nli_model,
             entailment_threshold=self.config.consistency_entailment_threshold,
+            evidence_top_k=self.config.consistency_evidence_top_k,
             device=device,
         )
 
