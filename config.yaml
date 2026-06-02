@@ -71,6 +71,8 @@ test:
     num_beams: 1
   corrector:
     num_beams: 1
+    max_length_ratio: 3.0                # relaxed for Qwen2.5-1.5B (tends to be verbose)
+    max_new_tokens: 60
 
 # ── Full profile (final experiment) ───────────────────────────────
 full:

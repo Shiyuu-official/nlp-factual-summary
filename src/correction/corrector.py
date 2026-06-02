@@ -116,6 +116,8 @@ class LocalEditCorrector:
                     early_stopping=True,
                     do_sample=(self.temperature > 0),
                     temperature=self.temperature if self.temperature > 0 else 1.0,
+                    no_repeat_ngram_size=3,
+                    repetition_penalty=1.15,
                     pad_token_id=self.tokenizer.pad_token_id,
                     eos_token_id=self.tokenizer.eos_token_id,
                 )
@@ -133,6 +135,12 @@ class LocalEditCorrector:
                     corrected = generated.split(prompt_end)[-1].strip()
                 else:
                     corrected = generated.strip()
+
+            # Clean up common model-generated prefixes
+            for prefix in ["(ONE sentence only):", "(ONE sentence only)",
+                           "Corrected sentence:", "ONE sentence only:"]:
+                if corrected.startswith(prefix):
+                    corrected = corrected[len(prefix):].strip()
 
             # Validate
             is_valid, reason = self._validate_correction(sentence, corrected)

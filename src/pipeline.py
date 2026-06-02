@@ -7,7 +7,6 @@ Each stage appends fields to a list of sample dicts that flow through the pipeli
 import logging
 import os
 import time
-import torch
 from typing import List, Dict, Optional
 
 from .utils.config import PipelineConfig
@@ -61,7 +60,6 @@ class Pipeline:
 
         loader = GovReportDataLoader(
             dataset_name=self.config.dataset_name,
-            cache_dir=self.config.dataset_cache_dir,
         )
         samples = loader.load(
             split=self.config.dataset_split,
@@ -84,7 +82,7 @@ class Pipeline:
         logger.info("=" * 60)
         logger.info("STAGE 2: Summarization")
         logger.info("=" * 60)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = self.config.device
         logger.info(f"Using device: {device}")
         summarizer = ChunkedSummarizer(
             model_name=self.config.summarizer_model,
@@ -114,7 +112,7 @@ class Pipeline:
         logger.info("=" * 60)
         logger.info(f"Evidence mode: {self.config.consistency_evidence_mode}")
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = self.config.device
         logger.info(f"Using device: {device}")
 
         splitter = SentenceSplitter()
@@ -156,7 +154,7 @@ class Pipeline:
         logger.info("STAGE 4: Error Correction")
         logger.info("=" * 60)
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = self.config.device
         logger.info(f"Using device: {device}")
 
         corrector = LocalEditCorrector(

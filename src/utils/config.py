@@ -5,12 +5,21 @@ from typing import List, Tuple, Optional
 import yaml
 
 
+def _resolve_device(device_str: str) -> str:
+    """Resolve 'auto' to the actual available device, pass through explicit values."""
+    if device_str == "auto":
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return device_str
+
+
 @dataclass
 class PipelineConfig:
     """Typed configuration resolved from config.yaml. All fields are flat for simple access."""
     mode: str = "test"
     seed: int = 42
     num_samples: int = 5
+    device: str = "cpu"
 
     # Dataset
     dataset_name: str = "ccdv/govreport-summarization"
@@ -77,6 +86,7 @@ def _flatten_config(raw: dict) -> PipelineConfig:
         mode=raw.get("mode", "test"),
         seed=raw.get("seed", 42),
         num_samples=raw.get("num_samples", 5),
+        device=_resolve_device(raw.get("device", "auto")),
         # Dataset
         dataset_name=raw["dataset"]["name"],
         dataset_split=raw["dataset"]["split"],

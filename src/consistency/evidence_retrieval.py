@@ -124,11 +124,19 @@ class SemanticRetriever(BaseEvidenceRetriever):
 
     def retrieve(self, hypothesis: str, document_sentences: List[str],
                  top_k: int = 3) -> List[Evidence]:
-        """Encode hypothesis, compute cosine similarity, return top-k evidence."""
+        """Encode hypothesis, compute cosine similarity, return top-k evidence.
+
+        Document embeddings are cached — they are only recomputed when the
+        document sentences change (e.g. a new sample).
+        """
         if not document_sentences:
             return []
 
         self._load_model()
+
+        # Reuse cached document embeddings when possible
+        if self._sentence_list != document_sentences:
+            self._encode_document(document_sentences)
 
         # Encode hypothesis
         hyp_embedding = self._model.encode(
@@ -137,13 +145,8 @@ class SemanticRetriever(BaseEvidenceRetriever):
             convert_to_numpy=True,
         )[0]
 
-        # Encode all document sentences
-        doc_embeddings = self._model.encode(
-            document_sentences,
-            batch_size=self.batch_size,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-        )
+        # Use cached document embeddings
+        doc_embeddings = self._encoded_sentences
 
         # Cosine similarity
         hyp_norm = hyp_embedding / (np.linalg.norm(hyp_embedding) + 1e-8)
