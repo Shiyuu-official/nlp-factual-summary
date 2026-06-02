@@ -1,56 +1,49 @@
-"""Sentence splitting with nltk."""
+"""Sentence splitting using regex — no NLTK download required.
+
+Uses punctuation-boundary heuristics that work well for formal English text
+(government reports, news, academic papers). Avoids the network dependency
+of nltk punkt downloads, which is blocked behind some firewalls.
+"""
 
 import logging
+import re
 from typing import List, Tuple
-
-import nltk
 
 logger = logging.getLogger(__name__)
 
+# Sentence-ending punctuation followed by space and capital letter / number / quote
+_SENT_END = re.compile(
+    r"(?<=[.!?])(?:\s+)(?=[A-Z0-9\"'‘“(])"
+)
+
 
 class SentenceSplitter:
-    """Wraps nltk sentence tokenizer with error handling.
-
-    Lazily downloads punkt data on first use.
-    """
+    """Regex-based sentence tokenizer. No network calls, no downloads."""
 
     def __init__(self):
-        self._ready = False
-
-    def _ensure_ready(self):
-        if self._ready:
-            return
-        # Try punkt_tab first (newer nltk), then punkt (older)
-        for resource in ("tokenizers/punkt_tab", "tokenizers/punkt"):
-            try:
-                nltk.data.find(resource)
-            except LookupError:
-                logger.info(f"NLTK {resource} not found, downloading...")
-                try:
-                    nltk.download(resource.split("/")[-1], quiet=True, raise_on_error=True)
-                except Exception as e:
-                    logger.warning(f"NLTK download failed ({e}). "
-                                   "If you are behind a firewall, set NLTK_DATA manually "
-                                   "or run: python -m nltk.downloader punkt")
-                    raise RuntimeError(
-                        f"NLTK '{resource}' is missing and auto-download failed. "
-                        f"Download it manually: python -m nltk.downloader punkt"
-                    ) from e
-        self._ready = True
+        pass  # nothing to download
 
     def split(self, text: str) -> List[str]:
         """Split text into sentences. Returns non-empty sentence strings."""
-        self._ensure_ready()
         if not text or not text.strip():
             return []
-        sentences = nltk.sent_tokenize(text)
-        return [s.strip() for s in sentences if s.strip()]
+
+        # Split on sentence boundaries, keeping the punctuation
+        parts = _SENT_END.split(text)
+        sentences = [s.strip() for s in parts if s.strip()]
+
+        # Merge very short fragments with the previous sentence
+        merged = []
+        for s in sentences:
+            if merged and len(s.split()) <= 2 and len(merged[-1].split()) > 5:
+                merged[-1] = merged[-1] + " " + s
+            else:
+                merged.append(s)
+
+        return merged
 
     def split_with_indices(self, text: str) -> List[Tuple[int, str]]:
-        """Split text and return (start_char_index, sentence_text) pairs.
-
-        Uses a simple scan to find each sentence's position in the original text.
-        """
+        """Split text and return (start_char_index, sentence_text) pairs."""
         sentences = self.split(text)
         result = []
         pos = 0
