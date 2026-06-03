@@ -7,12 +7,7 @@ Usage:
     python main.py --mode test --stage 4   # Run only correction stage
 """
 
-import os
 import argparse
-
-# Use HF mirror for model downloads (required in mainland China due to SSL proxy issues)
-if not os.environ.get("HF_ENDPOINT"):
-    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 from src.utils.config import load_config
 from src.pipeline import Pipeline

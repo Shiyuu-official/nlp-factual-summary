@@ -1,6 +1,7 @@
 """Long-document summarizer using chunked Qwen2.5-1.5B-Instruct with beam search."""
 
 import logging
+import re
 from typing import List, Dict
 
 import torch
@@ -8,6 +9,31 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+
+SUMMARY_SYSTEM_PROMPT = """You are a government-report summarization system.
+You must write only facts that are directly supported by the provided report excerpt."""
+
+
+SUMMARY_USER_PROMPT = """Write a factual summary of the government report excerpt below.
+
+Rules:
+- Return only the summary.
+- Write one plain paragraph, not a list.
+- Do not explain your process.
+- Do not mention that you are an AI assistant.
+- Do not evaluate the summary itself.
+- Do not use Markdown, headings, bullets, numbering, or labels.
+- Do not write recommendations unless the report explicitly states them.
+- Do not introduce countries, organizations, people, events, or topics absent from the excerpt.
+- Every sentence must be grounded in the excerpt.
+- Preserve concrete entities, agencies, numbers, dates, and actions.
+- Use complete sentences.
+
+Report excerpt:
+{text}
+
+Summary:"""
 
 
 class ChunkedSummarizer:
@@ -63,11 +89,7 @@ class ChunkedSummarizer:
 
     def _summarize_chunk(self, chunk: str, max_length: int) -> str:
         """Summarize a single text chunk."""
-        prompt = (
-            "Summarize the following text concisely, preserving all key facts and entities:\n\n"
-            f"{chunk}\n\n"
-            "Summary:"
-        )
+        prompt = self._build_prompt(chunk)
 
         inputs = self.tokenizer(
             prompt, return_tensors="pt", truncation=True,
@@ -86,26 +108,87 @@ class ChunkedSummarizer:
                 eos_token_id=self.tokenizer.eos_token_id,
             )
 
-        generated = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-        # Extract the part after "Summary:"
-        if "Summary:" in generated:
-            generated = generated.split("Summary:")[-1].strip()
-        return generated
+        prompt_len = inputs["input_ids"].shape[-1]
+        generated_tokens = outputs[0][prompt_len:]
+        generated = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        return self._clean_summary_text(generated)
+
+    def _build_prompt(self, text: str) -> str:
+        """Build a prompt using the model's chat template when available."""
+        user_prompt = SUMMARY_USER_PROMPT.format(text=text)
+        if getattr(self.tokenizer, "chat_template", None):
+            messages = [
+                {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
+            return self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        return f"{SUMMARY_SYSTEM_PROMPT}\n\n{user_prompt}"
+
+    def _clean_summary_text(self, text: str) -> str:
+        """Remove common instruction-following artifacts and normalize spacing."""
+        if not text:
+            return ""
+
+        text = text.replace("\r", "\n")
+        text = re.sub(r"^(summary|final summary)\s*:\s*", "", text.strip(),
+                      flags=re.IGNORECASE)
+        text = re.sub(r"\*\*(.*?)\*\*\s*:\s*", r"\1: ", text)
+        text = re.sub(r"(^|\s)([-*]|\d+[.)])\s+", " ", text)
+        text = re.sub(r"\s+", " ", text)
+        text = re.sub(r"([.!?])(?=[A-Z])", r"\1 ", text)
+        for marker in [" Human:", " Assistant:", " User:", "\nHuman:", "\nAssistant:", "\nUser:"]:
+            if marker in text:
+                text = text.split(marker, 1)[0].strip()
+
+        blocked_patterns = [
+            r"\byou are an ai assistant\b",
+            r"\bas an ai\b",
+            r"\bi cannot\b",
+            r"\bthe summary does not\b",
+            r"\bthis summary\b",
+            r"\bhuman resources management system\b",
+            r"\bhuman resources department\b",
+            r"\bhuman rights watch\b",
+            r"\bmyanmar\b",
+            r"\bmilitary junta\b",
+            r"\bpeaceful protesters\b",
+        ]
+
+        sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+        cleaned = []
+        for sent in sentences:
+            sent = sent.strip(" \"'`")
+            if not sent:
+                continue
+            if re.fullmatch(r"\d+[.)]?", sent):
+                continue
+            lowered = sent.lower()
+            if any(re.search(pattern, lowered) for pattern in blocked_patterns):
+                continue
+            cleaned.append(sent)
+
+        return " ".join(cleaned).strip()
 
     def _merge_summaries(self, chunk_summaries: List[str]) -> str:
         """Merge multiple chunk summaries into a final summary."""
         if not chunk_summaries:
             return ""
         if len(chunk_summaries) == 1:
-            return chunk_summaries[0]
+            return self._clean_summary_text(chunk_summaries[0])
 
         combined = "\n\n".join(chunk_summaries)
         # If already short enough, return as-is
         if len(combined.split()) <= self.max_summary_length:
-            return combined
+            return self._clean_summary_text(combined)
 
         # Otherwise re-summarize the combined text
-        return self._summarize_chunk(combined, self.max_summary_length)
+        return self._clean_summary_text(
+            self._summarize_chunk(combined, self.max_summary_length)
+        )
 
     def summarize_single(self, document: str) -> str:
         """Summarize a single document. Returns generated summary string."""

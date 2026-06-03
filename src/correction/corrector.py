@@ -6,7 +6,7 @@ that rejects corrections which are too long or contain multiple sentences.
 
 import logging
 import re
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Tuple
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -15,23 +15,22 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 # Prompt template with strict local-editing constraints
-CORRECTION_PROMPT = """You are a precise fact-checking editor. Your task is to correct a SINGLE factual error in ONE sentence using evidence from the source document.
+CORRECTION_PROMPT = """Correct the summary sentence using the evidence.
 
-RULES (follow exactly):
-1. ONLY change the specific words or phrases that are factually wrong.
-2. Keep the original sentence structure, grammar, and style IDENTICAL.
-3. Do NOT add information beyond what is needed to fix the error.
-4. Do NOT copy or restate entire passages from the evidence.
-5. Do NOT write a new sentence from scratch.
-6. Your output must be ONE sentence and nothing else.
+Rules:
+- Return ONLY the corrected sentence.
+- Do not explain.
+- Do not quote or copy the evidence.
+- Keep the corrected sentence close to the original length.
+- If only a phrase is wrong, change only that phrase.
 
-Source document evidence:
+Evidence:
 {evidence}
 
-Original sentence (may contain a factual error):
+Original sentence:
 {sentence}
 
-Corrected sentence (ONE sentence only):"""
+Corrected sentence:"""
 
 
 class LocalEditCorrector:
@@ -74,8 +73,13 @@ class LocalEditCorrector:
         corrected = corrected.strip()
         if not corrected:
             return False, "empty_output"
+        if re.fullmatch(r"[\W_]+|\d+[.)]?", original.strip()):
+            return False, "invalid_original_sentence"
         if corrected == original.strip():
             return False, "no_change"
+        if re.search(r"\b(human|assistant|user)\s*:|\bhuman resources\b",
+                     corrected, flags=re.IGNORECASE):
+            return False, "dialogue_artifact"
 
         # Check length: corrected shouldn't be much longer than original
         orig_words = len(original.split())
@@ -89,6 +93,36 @@ class LocalEditCorrector:
             return False, "appears_to_be_evidence_passage"
 
         return True, ""
+
+    def _clean_generated_text(self, generated: str) -> str:
+        """Extract a single corrected sentence from model output."""
+        text = generated.strip()
+        text = re.sub(r"^(corrected sentence|correction|answer)\s*:\s*", "",
+                      text, flags=re.IGNORECASE)
+        text = text.splitlines()[0].strip() if text else ""
+        text = text.strip(" \"'`")
+
+        text = re.split(
+            r"\s+(?:Human|Assistant|User)\s*:|[.!?]?\s*Human resources\b",
+            text,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
+
+        # If the model still explains itself, keep the part before the explanation.
+        for marker in [
+            " Evidence:", " Original sentence:", " Explanation:", " Note:",
+            " Human:", " Assistant:", " User:", "\nHuman:", "\nAssistant:", "\nUser:",
+            " Human resources", " human resources",
+        ]:
+            if marker in text:
+                text = text.split(marker, 1)[0].strip()
+
+        sentence_match = re.match(r"^(.+?[.!?])(?:\s|$)", text)
+        if sentence_match:
+            text = sentence_match.group(1).strip()
+
+        return text
 
     def correct_single(self, sentence: str, evidence_text: str) -> Dict:
         """Correct a single inconsistent sentence.
@@ -120,19 +154,10 @@ class LocalEditCorrector:
                     eos_token_id=self.tokenizer.eos_token_id,
                 )
 
-            generated = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-            # Extract only the corrected sentence (after "Corrected sentence:")
-            if "Corrected sentence" in generated:
-                parts = generated.rsplit("Corrected sentence", 1)
-                corrected = parts[-1].strip().lstrip(":").strip()
-            else:
-                # Fallback: strip the prompt part
-                prompt_end = "Corrected sentence (ONE sentence only):"
-                if prompt_end in generated:
-                    corrected = generated.split(prompt_end)[-1].strip()
-                else:
-                    corrected = generated.strip()
+            prompt_len = inputs["input_ids"].shape[-1]
+            generated_tokens = outputs[0][prompt_len:]
+            generated = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            corrected = self._clean_generated_text(generated)
 
             # Validate
             is_valid, reason = self._validate_correction(sentence, corrected)

@@ -36,10 +36,10 @@ defaults:
 
   corrector:
     model: Qwen/Qwen2.5-1.5B-Instruct
-    max_new_tokens: 100
+    max_new_tokens: 40
     temperature: 0.0
     num_beams: 3
-    max_length_ratio: 2.0                # reject if corrected > 2x original length
+    max_length_ratio: 1.5                # reject if corrected > 1.5x original length
 
   evaluation:
     rouge_types: [rouge1, rouge2, rougeL]
@@ -70,6 +70,7 @@ test:
     max_summary_length: 150
     num_beams: 1
   corrector:
+    max_new_tokens: 40
     num_beams: 1
 
 # ── Full profile (final experiment) ───────────────────────────────
