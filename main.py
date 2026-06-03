@@ -7,8 +7,16 @@ Usage:
     python main.py --mode test --stage 4   # Run only correction stage
 """
 
+import os
 import argparse
 
+# Optional cache override for GPU servers. Set PROJECT_CACHE_DIR explicitly when needed.
+cache_dir = os.environ.get("PROJECT_CACHE_DIR")
+if cache_dir:
+    os.makedirs(cache_dir, exist_ok=True)
+    os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(cache_dir, "models"))
+    os.environ.setdefault("HF_HOME", os.path.join(cache_dir, "huggingface"))
+    os.environ.setdefault("DATASETS_CACHE", os.path.join(cache_dir, "datasets"))
 from src.utils.config import load_config
 from src.pipeline import Pipeline
 

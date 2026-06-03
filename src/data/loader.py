@@ -1,6 +1,7 @@
 """GovReport dataset loader."""
 
 import logging
+import os
 from typing import List, Dict, Optional
 
 from datasets import load_dataset
@@ -34,10 +35,13 @@ class GovReportDataLoader:
         """
         logger.info(f"Loading {self.dataset_name} ({split} split)...")
 
+        # Environment variable wins on shared GPU servers; config value is fallback.
+        cache_dir = os.environ.get("DATASETS_CACHE", self.cache_dir)
+
         dataset = load_dataset(
             self.dataset_name,
             split=split,
-            cache_dir=self.cache_dir,
+            cache_dir=cache_dir,
         )
 
         # Deterministic shuffle so test mode sees the same samples every run
