@@ -61,7 +61,7 @@ class Pipeline:
 
         loader = GovReportDataLoader(
             dataset_name=self.config.dataset_name,
-            cache_dir=self.config.dataset_cache_dir,
+            
         )
         samples = loader.load(
             split=self.config.dataset_split,
