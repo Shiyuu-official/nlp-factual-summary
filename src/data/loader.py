@@ -13,8 +13,10 @@ logger = logging.getLogger(__name__)
 class GovReportDataLoader:
     """Loads ccdv/govreport-summarization with optional sample limit and shuffle."""
 
-    def __init__(self, dataset_name: str = "ccdv/govreport-summarization"):
+    def __init__(self, dataset_name: str = "ccdv/govreport-summarization",
+                 cache_dir: Optional[str] = None):
         self.dataset_name = dataset_name
+        self.cache_dir = cache_dir
         # Ensure nltk sentence tokenizer is available
         try:
             nltk.data.find("tokenizers/punkt_tab")
@@ -33,8 +35,8 @@ class GovReportDataLoader:
         """
         logger.info(f"Loading {self.dataset_name} ({split} split)...")
 
-        # Use cache directory from environment variable
-        cache_dir = os.environ.get("DATASETS_CACHE", "./data_cache")
+        # Environment variable wins on shared GPU servers; config value is fallback.
+        cache_dir = os.environ.get("DATASETS_CACHE", self.cache_dir)
 
         dataset = load_dataset(
             self.dataset_name,
