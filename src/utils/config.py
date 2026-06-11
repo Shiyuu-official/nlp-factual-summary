@@ -73,6 +73,11 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 def _flatten_config(raw: dict) -> PipelineConfig:
     """Convert nested config dict to flat PipelineConfig dataclass."""
+    semantic_enabled = raw.get("semantic_retrieval", {}).get("enabled", False)
+    evidence_mode = raw["consistency"]["evidence_mode"]
+    if semantic_enabled:
+        evidence_mode = "semantic"
+
     return PipelineConfig(
         mode=raw.get("mode", "test"),
         seed=raw.get("seed", 42),
@@ -93,11 +98,11 @@ def _flatten_config(raw: dict) -> PipelineConfig:
         consistency_entailment_threshold=raw["consistency"]["entailment_threshold"],
         consistency_evidence_top_k=raw["consistency"]["evidence_top_k"],
         consistency_sentence_window=raw["consistency"]["sentence_window"],
-        consistency_evidence_mode=raw["consistency"]["evidence_mode"],
+        consistency_evidence_mode=evidence_mode,
         # Semantic retrieval
         semantic_retrieval_model=raw["semantic_retrieval"]["model"],
         semantic_retrieval_batch_size=raw["semantic_retrieval"]["batch_size"],
-        semantic_retrieval_enabled=raw.get("semantic_retrieval", {}).get("enabled", False),
+        semantic_retrieval_enabled=semantic_enabled,
         # Corrector
         corrector_model=raw["corrector"]["model"],
         corrector_max_new_tokens=raw["corrector"]["max_new_tokens"],

@@ -6,7 +6,7 @@ that rejects corrections which are too long or contain multiple sentences.
 
 import logging
 import re
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -248,10 +248,16 @@ class LocalEditCorrector:
             "n_succeeded": n_succeeded,
         }
 
-    def correct_batch(self, samples: List[Dict]) -> List[Dict]:
+    def correct_batch(self, samples: List[Dict],
+                      checkpoint_path: Optional[str] = None,
+                      existing_results: Optional[List[Dict]] = None) -> List[Dict]:
         """Batch correction. Adds 'correction' dict to each sample."""
-        results = []
+        results = list(existing_results or [])
+        done_ids = {r.get("sample_id") for r in results}
         for item in tqdm(samples, desc="Correcting", unit="sample"):
+            if item.get("sample_id") in done_ids:
+                continue
+
             record = dict(item)
             try:
                 record["correction"] = self.correct_summary(
@@ -270,5 +276,10 @@ class LocalEditCorrector:
                     "error": str(e),
                 }
             results.append(record)
+            done_ids.add(record.get("sample_id"))
+
+            if checkpoint_path:
+                from ..utils.io import save_json
+                save_json(results, checkpoint_path)
 
         return results

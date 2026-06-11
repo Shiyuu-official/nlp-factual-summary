@@ -25,6 +25,7 @@ def collect_correction_cases(samples: List[Dict],
             # Get the NLI results for this sentence
             sent_info = sentences[idx] if 0 <= idx < len(sentences) else {}
             nli_results = sent_info.get("nli_per_evidence", [])
+            verification = c.get("verification", {})
 
             all_cases.append({
                 "sample_id": s.get("sample_id"),
@@ -37,6 +38,15 @@ def collect_correction_cases(samples: List[Dict],
                 "original_nli_label": nli_results[0].get("label", "") if nli_results else "",
                 "original_entailment_score": (
                     nli_results[0].get("entailment_score", 0) if nli_results else 0
+                ),
+                "verified": verification.get("verified", False),
+                "improved": verification.get("improved", False),
+                "fixed": verification.get("fixed", False),
+                "verified_original_entailment_score": verification.get(
+                    "original_entailment_score", 0
+                ),
+                "verified_corrected_entailment_score": verification.get(
+                    "corrected_entailment_score", 0
                 ),
             })
 
@@ -76,6 +86,7 @@ def print_case_report(cases: Dict) -> None:
     for i, case in enumerate(cases["successful"][:5], 1):
         print(f"\nCase S-{i} (sample {case['sample_id']}, sentence {case['sentence_index']})")
         print(f"  Original entailment: {case['original_entailment_score']:.3f} ({case['original_nli_label']})")
+        print(f"  Verified: {case['verified']}  improved: {case['improved']}  fixed: {case['fixed']}")
         print(f"  Before: {case['original'][:150]}")
         print(f"  After:  {case['corrected'][:150]}")
         print(f"  Evidence: {case['evidence'][:120]}...")

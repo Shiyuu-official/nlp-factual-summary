@@ -15,6 +15,7 @@ def compute_consistency_stats(samples: List[Dict]) -> Dict:
     total_sentences = 0
     total_consistent = 0
     total_inconsistent = 0
+    total_skipped = 0
 
     for s in samples:
         c = s.get("consistency", {})
@@ -24,6 +25,7 @@ def compute_consistency_stats(samples: List[Dict]) -> Dict:
         total_sentences += c.get("n_total", 0)
         total_consistent += c.get("n_consistent", 0)
         total_inconsistent += c.get("n_inconsistent", 0)
+        total_skipped += c.get("n_skipped", 0)
 
     rate = total_consistent / total_sentences if total_sentences > 0 else 0.0
 
@@ -32,6 +34,7 @@ def compute_consistency_stats(samples: List[Dict]) -> Dict:
         "total_sentences": total_sentences,
         "total_consistent": total_consistent,
         "total_inconsistent": total_inconsistent,
+        "total_skipped": total_skipped,
         "overall_consistency_rate": round(rate, 4),
         "overall_error_rate": round(1 - rate, 4),
     }
@@ -41,22 +44,42 @@ def compute_correction_stats(samples: List[Dict]) -> Dict:
     """Aggregate correction statistics."""
     total_attempted = 0
     total_succeeded = 0
+    total_verified = 0
+    total_improved = 0
+    total_fixed = 0
     failure_reasons = {}
+    verification_failure_reasons = {}
 
     for s in samples:
         corr = s.get("correction", {})
         total_attempted += corr.get("n_attempted", 0)
         total_succeeded += corr.get("n_succeeded", 0)
+        total_verified += corr.get("n_verified", 0)
+        total_improved += corr.get("n_improved", 0)
+        total_fixed += corr.get("n_fixed", 0)
         for c in corr.get("corrections", []):
             reason = c.get("failure_reason")
             if reason and not c.get("success", False):
                 failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+            verification = c.get("verification", {})
+            if c.get("success") and not verification.get("verified", False):
+                v_reason = verification.get("failure_reason", "not_improved_or_not_entailed")
+                verification_failure_reasons[v_reason] = (
+                    verification_failure_reasons.get(v_reason, 0) + 1
+                )
 
     return {
         "total_attempted": total_attempted,
-        "total_succeeded": total_succeeded,
-        "success_rate": round(total_succeeded / total_attempted, 4) if total_attempted > 0 else 0.0,
+        "total_format_succeeded": total_succeeded,
+        "format_success_rate": round(total_succeeded / total_attempted, 4) if total_attempted > 0 else 0.0,
+        "total_nli_verified": total_verified,
+        "nli_verified_rate": round(total_verified / total_succeeded, 4) if total_succeeded > 0 else 0.0,
+        "total_improved": total_improved,
+        "improved_rate": round(total_improved / total_succeeded, 4) if total_succeeded > 0 else 0.0,
+        "total_fixed": total_fixed,
+        "fixed_rate": round(total_fixed / total_attempted, 4) if total_attempted > 0 else 0.0,
         "failure_reasons": failure_reasons,
+        "verification_failure_reasons": verification_failure_reasons,
     }
 
 

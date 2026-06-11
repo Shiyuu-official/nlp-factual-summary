@@ -9,9 +9,10 @@ import os
 import time
 import torch
 from typing import List, Dict, Optional
+from tqdm import tqdm
 
 from .utils.config import PipelineConfig
-from .utils.io import save_json, load_json, timestamped_dir
+from .utils.io import ensure_dir, save_json, load_json, timestamped_dir
 from .utils.logging import setup_logging
 from .data.loader import GovReportDataLoader
 from .summarization.summarizer import ChunkedSummarizer
@@ -36,20 +37,49 @@ class Pipeline:
         pipeline.run()
     """
 
-    def __init__(self, config: PipelineConfig):
+    def __init__(self, config: PipelineConfig, run_dir: Optional[str] = None):
         self.config = config
-        self.run_dir = None
+        self.run_dir = run_dir
         self.logger = logging.getLogger(__name__)
 
-    def _setup_run_dir(self) -> str:
-        """Create timestamped output directory and save config snapshot."""
-        self.run_dir = timestamped_dir(self.config.output_root_dir)
+    def _setup_run_dir(self, reuse_existing: bool = False) -> str:
+        """Create or reuse an output directory and save config snapshot."""
+        if self.run_dir:
+            if reuse_existing and not os.path.isdir(self.run_dir):
+                raise FileNotFoundError(f"Run directory not found: {self.run_dir}")
+            self.run_dir = ensure_dir(self.run_dir)
+        else:
+            self.run_dir = timestamped_dir(self.config.output_root_dir)
+
         save_json(
             {k: str(v) if not isinstance(v, (str, int, float, bool, list, dict, type(None)))
              else v for k, v in vars(self.config).items()},
             os.path.join(self.run_dir, "config_applied.json"),
         )
         return self.run_dir
+
+    def _stage_path(self, filename: str) -> str:
+        return os.path.join(self.run_dir, filename)
+
+    def _load_stage_results(self, final_name: str, partial_name: str) -> List[Dict]:
+        """Load final stage output if present, otherwise partial checkpoint."""
+        final = load_json(self._stage_path(final_name))
+        if final is not None:
+            logger.info(f"Loaded completed stage output: {final_name}")
+            return final
+
+        partial = load_json(self._stage_path(partial_name))
+        if partial is not None:
+            logger.info(f"Loaded partial stage checkpoint: {partial_name}")
+            return partial
+
+        return []
+
+    def _results_cover_samples(self, results: List[Dict], samples: List[Dict]) -> bool:
+        """Return True when checkpoint/final results cover every input sample."""
+        result_ids = {item.get("sample_id") for item in results}
+        sample_ids = {item.get("sample_id") for item in samples}
+        return bool(sample_ids) and sample_ids.issubset(result_ids)
 
     # ── Stage 1: Data Loading ──────────────────────────────────────────
 
@@ -84,6 +114,17 @@ class Pipeline:
         logger.info("=" * 60)
         logger.info("STAGE 2: Summarization")
         logger.info("=" * 60)
+        partial_path = self._stage_path("step2_summaries.partial.json")
+        existing = self._load_stage_results(
+            "step2_summaries.json",
+            "step2_summaries.partial.json",
+        )
+        if self._results_cover_samples(existing, samples):
+            logger.info("Stage 2 already complete; skipping summarization model load")
+            if self.config.output_save_intermediate:
+                save_json(existing, self._stage_path("step2_summaries.json"))
+            return existing
+
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Using device: {device}")
         summarizer = ChunkedSummarizer(
@@ -96,10 +137,14 @@ class Pipeline:
             device=device,
         )
 
-        results = summarizer.summarize_batch(samples)
+        results = summarizer.summarize_batch(
+            samples,
+            checkpoint_path=partial_path,
+            existing_results=existing,
+        )
 
         if self.config.output_save_intermediate:
-            save_json(results, os.path.join(self.run_dir, "step2_summaries.json"))
+            save_json(results, self._stage_path("step2_summaries.json"))
 
         # Free summarizer memory before loading next model
         del summarizer
@@ -113,6 +158,16 @@ class Pipeline:
         logger.info("STAGE 3: Consistency Checking")
         logger.info("=" * 60)
         logger.info(f"Evidence mode: {self.config.consistency_evidence_mode}")
+        partial_path = self._stage_path("step3_consistency.partial.json")
+        existing = self._load_stage_results(
+            "step3_consistency.json",
+            "step3_consistency.partial.json",
+        )
+        if self._results_cover_samples(existing, samples):
+            logger.info("Stage 3 already complete; skipping NLI model load")
+            if self.config.output_save_intermediate:
+                save_json(existing, self._stage_path("step3_consistency.json"))
+            return existing
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Using device: {device}")
@@ -134,7 +189,13 @@ class Pipeline:
             device=device,
         )
 
-        results = checker.check_batch(samples, splitter, retriever)
+        results = checker.check_batch(
+            samples,
+            splitter,
+            retriever,
+            checkpoint_path=partial_path,
+            existing_results=existing,
+        )
 
         # Log summary stats
         total_s = sum(r.get("consistency", {}).get("n_total", 0) for r in results)
@@ -143,7 +204,7 @@ class Pipeline:
                      f"({total_c/total_s:.2%})" if total_s > 0 else "N/A")
 
         if self.config.output_save_intermediate:
-            save_json(results, os.path.join(self.run_dir, "step3_consistency.json"))
+            save_json(results, self._stage_path("step3_consistency.json"))
 
         del checker, retriever, splitter
         return results
@@ -155,6 +216,16 @@ class Pipeline:
         logger.info("=" * 60)
         logger.info("STAGE 4: Error Correction")
         logger.info("=" * 60)
+        partial_path = self._stage_path("step4_corrections.partial.json")
+        existing = self._load_stage_results(
+            "step4_corrections.json",
+            "step4_corrections.partial.json",
+        )
+        if self._results_cover_samples(existing, samples):
+            logger.info("Stage 4 already complete; skipping correction model load")
+            if self.config.output_save_intermediate:
+                save_json(existing, self._stage_path("step4_corrections.json"))
+            return existing
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Using device: {device}")
@@ -168,18 +239,123 @@ class Pipeline:
             device=device,
         )
 
-        results = corrector.correct_batch(samples)
+        results = corrector.correct_batch(
+            samples,
+            checkpoint_path=partial_path,
+            existing_results=existing,
+        )
+        del corrector
+        if device == "cuda":
+            torch.cuda.empty_cache()
+
+        results = self._verify_corrections(
+            results,
+            device=device,
+            checkpoint_path=partial_path,
+        )
 
         # Log stats
         total_att = sum(r.get("correction", {}).get("n_attempted", 0) for r in results)
         total_succ = sum(r.get("correction", {}).get("n_succeeded", 0) for r in results)
-        logger.info(f"Corrections: {total_succ}/{total_att} succeeded")
+        total_verified = sum(r.get("correction", {}).get("n_verified", 0) for r in results)
+        logger.info(
+            f"Corrections: {total_succ}/{total_att} format-valid, "
+            f"{total_verified}/{total_succ} NLI-verified"
+        )
 
         if self.config.output_save_intermediate:
-            save_json(results, os.path.join(self.run_dir, "step4_corrections.json"))
+            save_json(results, self._stage_path("step4_corrections.json"))
 
-        del corrector
         return results
+
+    def _verify_corrections(self, samples: List[Dict], device: str,
+                            checkpoint_path: Optional[str] = None) -> List[Dict]:
+        """Re-check accepted corrections with NLI against their selected evidence."""
+        total_success = sum(
+            1
+            for sample in samples
+            for corr in sample.get("correction", {}).get("corrections", [])
+            if corr.get("success") and "verification" not in corr
+        )
+        if total_success == 0:
+            return samples
+
+        logger.info("Verifying corrected sentences with NLI...")
+        checker = NLIChecker(
+            model_name=self.config.consistency_nli_model,
+            entailment_threshold=self.config.consistency_entailment_threshold,
+            evidence_top_k=self.config.consistency_evidence_top_k,
+            device=device,
+        )
+
+        for sample in tqdm(samples, desc="Verifying corrections", unit="sample"):
+            correction = sample.get("correction", {})
+            n_verified = 0
+            n_improved = 0
+            n_fixed = 0
+
+            for corr in correction.get("corrections", []):
+                if not corr.get("success"):
+                    continue
+                if "verification" in corr:
+                    n_verified += int(corr["verification"].get("verified", False))
+                    n_improved += int(corr["verification"].get("improved", False))
+                    n_fixed += int(corr["verification"].get("fixed", False))
+                    continue
+
+                evidence = corr.get("evidence_used", "")
+                original = corr.get("original", "")
+                corrected = corr.get("corrected", "")
+                if not evidence or not original or not corrected:
+                    corr["verification"] = {
+                        "verified": False,
+                        "failure_reason": "missing_evidence_or_sentence",
+                    }
+                    continue
+
+                try:
+                    before = checker.check_pair(evidence, original)
+                    after = checker.check_pair(evidence, corrected)
+                    before_score = before["entailment_score"]
+                    after_score = after["entailment_score"]
+                    improved = after_score > before_score
+                    fixed = (not before["is_consistent"]) and after["is_consistent"]
+                    verified = after["is_consistent"] and improved
+
+                    corr["verification"] = {
+                        "verified": verified,
+                        "improved": improved,
+                        "fixed": fixed,
+                        "original_entailment_score": before_score,
+                        "corrected_entailment_score": after_score,
+                        "original_label": before["label"],
+                        "corrected_label": after["label"],
+                    }
+
+                    n_verified += int(verified)
+                    n_improved += int(improved)
+                    n_fixed += int(fixed)
+                except Exception as e:
+                    logger.warning(
+                        f"Correction verification failed for sample "
+                        f"{sample.get('sample_id')}: {e}"
+                    )
+                    corr["verification"] = {
+                        "verified": False,
+                        "failure_reason": str(e),
+                    }
+
+            correction["n_verified"] = n_verified
+            correction["n_improved"] = n_improved
+            correction["n_fixed"] = n_fixed
+
+            if checkpoint_path:
+                save_json(samples, checkpoint_path)
+
+        del checker
+        if device == "cuda":
+            torch.cuda.empty_cache()
+        return samples
 
     # ── Stage 5: Evaluation ───────────────────────────────────────────
 
@@ -203,7 +379,14 @@ class Pipeline:
             logger.info(f"ROUGE-1: {r1:.4f}  ROUGE-2: {r2:.4f}  ROUGE-L: {rL:.4f}")
 
         logger.info(f"Consistency rate: {comparison['consistency']['overall_consistency_rate']:.2%}")
-        logger.info(f"Correction success: {comparison['correction']['success_rate']:.2%}")
+        logger.info(
+            f"Correction format success: "
+            f"{comparison['correction']['format_success_rate']:.2%}"
+        )
+        logger.info(
+            f"Correction NLI verified: "
+            f"{comparison['correction']['nli_verified_rate']:.2%}"
+        )
 
         if self.config.output_save_intermediate:
             save_json(comparison, os.path.join(self.run_dir, "step5_comparison.json"))
@@ -251,7 +434,7 @@ class Pipeline:
         """Run all stages in sequence. Returns the final combined result."""
         start_time = time.time()
 
-        self._setup_run_dir()
+        self._setup_run_dir(reuse_existing=False)
         setup_logging(self.config.log_level, os.path.join(self.run_dir, "pipeline.log"))
         logger = logging.getLogger(__name__)
         logger.info(f"Pipeline starting. Mode: {self.config.mode}, "
@@ -293,14 +476,19 @@ class Pipeline:
         Args:
             start_stage: Stage number to resume from (1-6).
         """
-        self._setup_run_dir()
+        if start_stage >= 3 and not self.run_dir:
+            raise ValueError(
+                "--run-dir is required when resuming from stage 3 or later. "
+                "Example: python main.py --stage 4 --run-dir results/2026-06-02_195434"
+            )
+
+        self._setup_run_dir(reuse_existing=bool(self.run_dir))
         setup_logging(self.config.log_level, os.path.join(self.run_dir, "pipeline.log"))
         logger = logging.getLogger(__name__)
         logger.info(f"Resuming from stage {start_stage}")
 
-        # Load the output of the previous stage
+        # Load the output of the previous stage from the selected run directory.
         stage_files = {
-            2: "step1_data_stats.json",  # we need to re-load data
             3: "step2_summaries.json",
             4: "step3_consistency.json",
             5: "step4_corrections.json",

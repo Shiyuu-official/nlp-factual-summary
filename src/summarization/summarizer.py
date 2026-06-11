@@ -2,6 +2,7 @@
 
 import logging
 import re
+from typing import Optional
 from typing import List, Dict
 
 import torch
@@ -205,14 +206,20 @@ class ChunkedSummarizer:
 
         return self._merge_summaries(chunk_summaries)
 
-    def summarize_batch(self, samples: List[Dict]) -> List[Dict]:
+    def summarize_batch(self, samples: List[Dict],
+                        checkpoint_path: Optional[str] = None,
+                        existing_results: Optional[List[Dict]] = None) -> List[Dict]:
         """Summarize a batch of samples.
 
         Each sample (dict) must have keys: sample_id, report, reference_summary.
         Returns the same list with 'generated_summary' and 'num_chunks' added.
         """
-        results = []
+        results = list(existing_results or [])
+        done_ids = {r.get("sample_id") for r in results}
         for item in tqdm(samples, desc="Summarizing", unit="sample"):
+            if item.get("sample_id") in done_ids:
+                continue
+
             record = dict(item)
             try:
                 chunks = self._split_document(record["report"])
@@ -227,5 +234,10 @@ class ChunkedSummarizer:
                 record["generated_summary"] = ""
                 record["num_chunks"] = 0
             results.append(record)
+            done_ids.add(record.get("sample_id"))
+
+            if checkpoint_path:
+                from ..utils.io import save_json
+                save_json(results, checkpoint_path)
 
         return results

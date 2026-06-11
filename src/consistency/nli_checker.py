@@ -8,7 +8,8 @@ Checks each summary sentence against the source document:
 """
 
 import logging
-from typing import List, Dict
+import re
+from typing import List, Dict, Optional
 
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
@@ -85,6 +86,74 @@ class NLIChecker:
             "scores": scores,
         }
 
+    def _check_entailment_batch(self, premises: List[str],
+                                hypotheses: List[str]) -> List[Dict]:
+        """Run NLI for multiple premise/hypothesis pairs in one model call."""
+        if not premises:
+            return []
+
+        inputs = self.tokenizer(
+            premises, hypotheses,
+            return_tensors="pt",
+            truncation=True,
+            max_length=512,
+            padding=True,
+        ).to(self.device)
+
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            probs = torch.softmax(outputs.logits, dim=-1)
+
+        results = []
+        for row in probs:
+            scores = {
+                self.id2label.get(i, f"label_{i}"): row[i].item()
+                for i in range(len(row))
+            }
+            predicted_id = torch.argmax(row).item()
+            predicted = self.id2label.get(predicted_id, f"label_{predicted_id}")
+            results.append({
+                "label": predicted,
+                "entailment_score": row[self.entailment_label_id].item(),
+                "scores": scores,
+            })
+
+        return results
+
+    def check_pair(self, evidence: str, sentence: str) -> Dict:
+        """Check whether one evidence passage supports one sentence."""
+        result = self._check_entailment(evidence, sentence)
+        score = result["entailment_score"]
+        result["is_consistent"] = score >= self.entailment_threshold
+        result["entailment_score"] = round(score, 4)
+        return result
+
+    def _is_checkable_sentence(self, sentence: str) -> bool:
+        """Return False for headings, fragments, and instruction artifacts."""
+        text = sentence.strip()
+        if not text:
+            return False
+        if re.fullmatch(r"[\W_]+|\d+[.)]?", text):
+            return False
+
+        lowered = text.lower()
+        blocked_prefixes = (
+            "summary:",
+            "key point",
+            "key points",
+            "note:",
+            "explanation:",
+            "corrected sentence:",
+        )
+        if lowered.startswith(blocked_prefixes):
+            return False
+
+        alpha_tokens = re.findall(r"[A-Za-z][A-Za-z'-]*", text)
+        if len(alpha_tokens) < 4:
+            return False
+
+        return True
+
     def _check_sentence(self, sentence: str,
                         retriever: BaseEvidenceRetriever,
                         document_sentences: List[str]) -> Dict:
@@ -107,13 +176,13 @@ class NLIChecker:
                 "failure_reason": "no_evidence_found",
             }
 
-        nli_results = []
+        premises = [ev.text for ev in evidences]
+        hypotheses = [sentence] * len(evidences)
+        nli_results = self._check_entailment_batch(premises, hypotheses)
         max_entailment = 0.0
 
-        for ev in evidences:
-            nli = self._check_entailment(ev.text, sentence)
+        for ev, nli in zip(evidences, nli_results):
             nli["evidence_score"] = ev.score
-            nli_results.append(nli)
             max_entailment = max(max_entailment, nli["entailment_score"])
 
         is_consistent = max_entailment >= self.entailment_threshold
@@ -135,7 +204,12 @@ class NLIChecker:
         Returns dict with: sentences (list of per-sentence results),
         n_total, n_consistent, n_inconsistent, consistency_rate
         """
-        summary_sentences = splitter.split(summary)
+        raw_summary_sentences = splitter.split(summary)
+        summary_sentences = [
+            sent for sent in raw_summary_sentences
+            if self._is_checkable_sentence(sent)
+        ]
+        n_skipped = len(raw_summary_sentences) - len(summary_sentences)
         document_sentences = splitter.split(report)
 
         if not summary_sentences:
@@ -144,6 +218,7 @@ class NLIChecker:
                 "n_total": 0,
                 "n_consistent": 0,
                 "n_inconsistent": 0,
+                "n_skipped": n_skipped,
                 "consistency_rate": 0.0,
             }
 
@@ -163,19 +238,26 @@ class NLIChecker:
             "n_total": n_total,
             "n_consistent": n_consistent,
             "n_inconsistent": n_inconsistent,
+            "n_skipped": n_skipped,
             "consistency_rate": round(consistency_rate, 4),
         }
 
     def check_batch(self, samples: List[Dict],
                     splitter: SentenceSplitter,
-                    retriever: BaseEvidenceRetriever) -> List[Dict]:
+                    retriever: BaseEvidenceRetriever,
+                    checkpoint_path: Optional[str] = None,
+                    existing_results: Optional[List[Dict]] = None) -> List[Dict]:
         """Batch consistency check.
 
         Each sample must have: sample_id, report, generated_summary.
         Adds 'consistency' dict to each sample.
         """
-        results = []
+        results = list(existing_results or [])
+        done_ids = {r.get("sample_id") for r in results}
         for item in tqdm(samples, desc="NLI consistency check", unit="sample"):
+            if item.get("sample_id") in done_ids:
+                continue
+
             record = dict(item)
             try:
                 record["consistency"] = self.check_summary(
@@ -195,5 +277,10 @@ class NLIChecker:
                     "error": str(e),
                 }
             results.append(record)
+            done_ids.add(record.get("sample_id"))
+
+            if checkpoint_path:
+                from ..utils.io import save_json
+                save_json(results, checkpoint_path)
 
         return results

@@ -4,7 +4,7 @@
 Usage:
     python main.py --mode test     # 5 samples, fast validation (~10 min)
     python main.py --mode full     # 500+ samples, final experiment
-    python main.py --mode test --stage 4   # Run only correction stage
+    python main.py --mode test --stage 4 --run-dir results/2026-06-02_195434
 """
 
 import os
@@ -33,10 +33,13 @@ def main():
     parser.add_argument("--stage", type=int, choices=[1, 2, 3, 4, 5, 6], default=None,
                         help="Run only a specific stage (1=data, 2=summarize, "
                              "3=consistency, 4=correct, 5=evaluate, 6=analyze)")
+    parser.add_argument("--run-dir", default=None,
+                        help="Existing results directory for resuming from --stage, "
+                             "or an explicit output directory for a new run")
     args = parser.parse_args()
 
     config = load_config(args.config, cli_mode=args.mode)
-    pipeline = Pipeline(config)
+    pipeline = Pipeline(config, run_dir=args.run_dir)
 
     if args.stage:
         pipeline.run_from_stage(args.stage)
