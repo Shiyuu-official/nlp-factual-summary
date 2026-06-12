@@ -1,55 +1,56 @@
-"""Sentence splitting with nltk."""
+"""Lightweight regex sentence splitting.
 
-import logging
+This avoids runtime NLTK downloads on restricted servers.
+"""
+
+import re
 from typing import List, Tuple
-
-import nltk
-
-logger = logging.getLogger(__name__)
 
 
 class SentenceSplitter:
-    """Wraps nltk sentence tokenizer with error handling.
+    """Rule-based sentence splitter for English report text."""
 
-    Lazily downloads punkt data on first use.
-    """
+    _boundary = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])")
+    _abbreviations = {
+        "Mr.", "Mrs.", "Ms.", "Dr.", "Prof.", "Sen.", "Rep.", "Gov.",
+        "U.S.", "U.K.", "D.C.", "No.", "Fig.", "e.g.", "i.e.", "vs.",
+    }
 
-    def __init__(self):
-        self._ready = False
+    def _protect_abbreviations(self, text: str) -> str:
+        protected = text
+        for abbr in self._abbreviations:
+            protected = protected.replace(abbr, abbr.replace(".", "<DOT>"))
+        return protected
 
-    def _ensure_ready(self):
-        if self._ready:
-            return
-        try:
-            nltk.data.find("tokenizers/punkt_tab")
-        except LookupError:
-            nltk.download("punkt_tab", quiet=True)
-        try:
-            nltk.data.find("tokenizers/punkt")
-        except LookupError:
-            nltk.download("punkt", quiet=True)
-        self._ready = True
+    def _restore_abbreviations(self, text: str) -> str:
+        return text.replace("<DOT>", ".")
 
     def split(self, text: str) -> List[str]:
-        """Split text into sentences. Returns non-empty sentence strings."""
-        self._ensure_ready()
+        """Split text into non-empty sentence-like strings."""
         if not text or not text.strip():
             return []
-        sentences = nltk.sent_tokenize(text)
-        return [s.strip() for s in sentences if s.strip()]
+
+        normalized = re.sub(r"\s+", " ", text.strip())
+        protected = self._protect_abbreviations(normalized)
+        pieces = self._boundary.split(protected)
+
+        sentences = []
+        for piece in pieces:
+            sent = self._restore_abbreviations(piece).strip()
+            if sent:
+                sentences.append(sent)
+
+        return sentences
 
     def split_with_indices(self, text: str) -> List[Tuple[int, str]]:
-        """Split text and return (start_char_index, sentence_text) pairs.
-
-        Uses a simple scan to find each sentence's position in the original text.
-        """
+        """Split text and return (start_char_index, sentence_text) pairs."""
         sentences = self.split(text)
         result = []
         pos = 0
         for sent in sentences:
             idx = text.find(sent, pos)
             if idx == -1:
-                idx = pos  # fallback
+                idx = pos
             result.append((idx, sent))
             pos = idx + len(sent)
         return result
