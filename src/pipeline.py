@@ -19,7 +19,7 @@ from .summarization.summarizer import ChunkedSummarizer
 from .consistency.sentence_splitter import SentenceSplitter
 from .consistency.evidence_retrieval import create_retriever
 from .consistency.nli_checker import NLIChecker
-from .correction.corrector import LocalEditCorrector
+from .correction.corrector import EvidenceConstrainedCorrector
 from .evaluation.rouge import RougeEvaluator
 from .evaluation.metrics import compare_before_after
 from .analysis.length_impact import analyze_length_impact, plot_length_impact
@@ -230,12 +230,17 @@ class Pipeline:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Using device: {device}")
 
-        corrector = LocalEditCorrector(
+        corrector = EvidenceConstrainedCorrector(
             model_name=self.config.corrector_model,
+            nli_model_name=self.config.corrector_nli_model,
             max_new_tokens=self.config.corrector_max_new_tokens,
-            temperature=self.config.corrector_temperature,
-            num_beams=self.config.corrector_num_beams,
+            num_candidates=self.config.corrector_num_candidates,
+            sample_temperature=self.config.corrector_sample_temperature,
+            entailment_threshold=self.config.consistency_entailment_threshold,
+            max_refinement_rounds=self.config.corrector_max_refinement_rounds,
             max_length_ratio=self.config.corrector_max_length_ratio,
+            enable_refinement=self.config.corrector_enable_refinement,
+            enable_extractive_fallback=self.config.corrector_enable_extractive_fallback,
             device=device,
         )
 
@@ -258,9 +263,21 @@ class Pipeline:
         total_att = sum(r.get("correction", {}).get("n_attempted", 0) for r in results)
         total_succ = sum(r.get("correction", {}).get("n_succeeded", 0) for r in results)
         total_verified = sum(r.get("correction", {}).get("n_verified", 0) for r in results)
+        # Strategy breakdown
+        strategy_counts = {"candidate": 0, "refinement": 0, "extractive": 0, "none": 0}
+        for r in results:
+            for c in r.get("correction", {}).get("corrections", []):
+                s = c.get("strategy", "none")
+                strategy_counts[s] = strategy_counts.get(s, 0) + 1
         logger.info(
             f"Corrections: {total_succ}/{total_att} format-valid, "
             f"{total_verified}/{total_succ} NLI-verified"
+        )
+        logger.info(
+            f"Strategy breakdown: candidate={strategy_counts['candidate']}, "
+            f"refinement={strategy_counts['refinement']}, "
+            f"extractive={strategy_counts['extractive']}, "
+            f"none={strategy_counts['none']}"
         )
 
         if self.config.output_save_intermediate:

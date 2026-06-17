@@ -39,10 +39,14 @@ class PipelineConfig:
 
     # Corrector
     corrector_model: str = "Qwen/Qwen2.5-1.5B-Instruct"
-    corrector_max_new_tokens: int = 100
-    corrector_temperature: float = 0.0
-    corrector_num_beams: int = 3
-    corrector_max_length_ratio: float = 2.0
+    corrector_nli_model: str = "facebook/bart-large-mnli"
+    corrector_max_new_tokens: int = 80
+    corrector_num_candidates: int = 5
+    corrector_sample_temperature: float = 0.7
+    corrector_max_refinement_rounds: int = 3
+    corrector_max_length_ratio: float = 1.5
+    corrector_enable_refinement: bool = True
+    corrector_enable_extractive_fallback: bool = True
 
     # Evaluation
     evaluation_rouge_types: List[str] = field(default_factory=lambda: ["rouge1", "rouge2", "rougeL"])
@@ -105,10 +109,14 @@ def _flatten_config(raw: dict) -> PipelineConfig:
         semantic_retrieval_enabled=semantic_enabled,
         # Corrector
         corrector_model=raw["corrector"]["model"],
+        corrector_nli_model=raw["corrector"].get("nli_model", "facebook/bart-large-mnli"),
         corrector_max_new_tokens=raw["corrector"]["max_new_tokens"],
-        corrector_temperature=raw["corrector"]["temperature"],
-        corrector_num_beams=raw["corrector"]["num_beams"],
+        corrector_num_candidates=raw["corrector"].get("num_candidates", 5),
+        corrector_sample_temperature=raw["corrector"].get("sample_temperature", 0.7),
+        corrector_max_refinement_rounds=raw["corrector"].get("max_refinement_rounds", 3),
         corrector_max_length_ratio=raw["corrector"]["max_length_ratio"],
+        corrector_enable_refinement=raw["corrector"].get("enable_refinement", True),
+        corrector_enable_extractive_fallback=raw["corrector"].get("enable_extractive_fallback", True),
         # Evaluation
         evaluation_rouge_types=raw["evaluation"]["rouge_types"],
         evaluation_use_stemmer=raw["evaluation"]["use_stemmer"],

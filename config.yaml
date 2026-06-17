@@ -36,10 +36,14 @@ defaults:
 
   corrector:
     model: Qwen/Qwen2.5-1.5B-Instruct
-    max_new_tokens: 40
-    temperature: 0.0
-    num_beams: 3
+    nli_model: facebook/bart-large-mnli
+    max_new_tokens: 80
+    num_candidates: 5                    # N diverse candidates per sentence
+    sample_temperature: 0.7              # >0 for diverse sampling
+    max_refinement_rounds: 3             # iterative NLI-guided refinement
     max_length_ratio: 1.5                # reject if corrected > 1.5x original length
+    enable_refinement: true              # enable iterative refinement
+    enable_extractive_fallback: true     # fall back to extractive replacement
 
   evaluation:
     rouge_types: [rouge1, rouge2, rougeL]
@@ -70,8 +74,10 @@ test:
     max_summary_length: 150
     num_beams: 1
   corrector:
-    max_new_tokens: 40
-    num_beams: 1
+    max_new_tokens: 60
+    num_candidates: 3
+    sample_temperature: 0.5
+    max_refinement_rounds: 1
 
 # ── Full profile (final experiment) ───────────────────────────────
 full:
