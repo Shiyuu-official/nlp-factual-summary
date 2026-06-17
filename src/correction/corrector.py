@@ -39,14 +39,15 @@ GENERATION_PROMPT = """Rewrite the summary sentence so that EVERY fact is direct
 Evidence:
 {evidence}
 
-Original sentence:
+Original sentence (length: {orig_len} words):
 {sentence}
 
 Rules:
 - Return ONLY the corrected sentence — no explanation, no preamble.
 - Every fact (entity, number, action, relationship) must appear in the evidence.
 - Do NOT add information absent from the evidence.
-- Keep the sentence close to the original length.
+- Keep the corrected sentence SHORT — at most 1.5× the original length ({max_words} words).
+- If you cannot verify a claim in the evidence, remove it rather than guess.
 - Use complete, grammatical English.
 
 Corrected sentence:"""
@@ -246,21 +247,25 @@ class EvidenceConstrainedCorrector:
 
     # ── Generation helpers ────────────────────────────────────────────
 
-    def _generate_one(self, prompt: str) -> str:
+    def _generate_one(self, prompt: str, deterministic: bool = False) -> str:
         """Generate a single output from the model."""
         inputs = self.tokenizer(
             prompt, return_tensors="pt",
             truncation=True, max_length=2048, padding=True,
         ).to(self.device)
 
+        temp = 0.0 if deterministic else self.sample_temperature
+
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
                 min_new_tokens=5,
-                do_sample=(self.sample_temperature > 0),
-                temperature=self.sample_temperature if self.sample_temperature > 0 else 1.0,
-                top_p=0.92,
+                do_sample=(temp > 0),
+                temperature=temp if temp > 0 else 1.0,
+                top_p=0.92 if temp > 0 else None,
+                num_beams=3,
+                early_stopping=True,
                 pad_token_id=self.tokenizer.pad_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
             )
@@ -302,19 +307,25 @@ class EvidenceConstrainedCorrector:
     # ── Step 2: Multi-candidate generation ────────────────────────────
 
     def _generate_candidates(self, sentence: str, evidence: str) -> List[str]:
-        """Generate N diverse correction candidates via sampling.
-
-        Each call uses independent random sampling (temperature > 0), so
-        the model explores different rewriting strategies.
+        """Generate N diverse correction candidates via sampling,
+        plus one deterministic beam-search backup for format reliability.
         """
-        prompt = GENERATION_PROMPT.format(evidence=evidence, sentence=sentence)
+        orig_len = len(sentence.split())
+        max_words = max(orig_len + 10, int(orig_len * self.max_length_ratio))
+        prompt = GENERATION_PROMPT.format(
+            evidence=evidence, sentence=sentence,
+            orig_len=orig_len, max_words=max_words,
+        )
+
         candidates = []
         seen = set()
-        for _ in range(self.num_candidates * 2):  # oversample to get N unique
+
+        # 1) Sampling candidates (diverse)
+        for _ in range(self.num_candidates * 2):
             if len(candidates) >= self.num_candidates:
                 break
             try:
-                cand = self._generate_one(prompt)
+                cand = self._generate_one(prompt, deterministic=False)
                 if not cand or cand == sentence.strip():
                     continue
                 key = cand.lower()
@@ -323,6 +334,19 @@ class EvidenceConstrainedCorrector:
                     candidates.append(cand)
             except Exception as e:
                 logger.warning(f"Candidate generation failed: {e}")
+
+        # 2) Deterministic backup: beam search, shorter output, reliable format
+        try:
+            backup = self._generate_one(prompt, deterministic=True)
+            if backup and backup != sentence.strip():
+                key = backup.lower()
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append(backup)
+                    logger.debug("Added deterministic beam-search backup candidate")
+        except Exception as e:
+            logger.warning(f"Deterministic backup failed: {e}")
+
         return candidates
 
     # ── Step 3: NLI scoring + selection ───────────────────────────────
@@ -373,9 +397,8 @@ class EvidenceConstrainedCorrector:
                 f"score {best_score:.3f} → {new_score:.3f}"
             )
 
-            # Greedy: accept if score improves (not just any increase —
-            # require meaningful improvement to avoid thrashing)
-            if new_score > best_score + 0.02:
+            # Greedy: accept if score improves (use small margin to avoid thrashing)
+            if new_score > best_score + 0.01:
                 best = revised
                 best_score = new_score
 
@@ -442,11 +465,16 @@ class EvidenceConstrainedCorrector:
 
         orig_words = len(original.split())
         corr_words = len(corrected.split())
-        if corr_words > orig_words * self.max_length_ratio:
+        # Allow more slack for short originals (hard to edit concisely)
+        effective_ratio = self.max_length_ratio
+        if orig_words <= 6:
+            effective_ratio = self.max_length_ratio + 1.0
+        if corr_words > orig_words * effective_ratio and corr_words > 20:
             return False, f"output_too_long ({corr_words} vs {orig_words} words)"
 
+        # Only flag multi-sentence when clearly copy-pasting (3+ sentences)
         sentence_seps = re.findall(r'[.!?]+', corrected)
-        if len(sentence_seps) > 1 and corr_words > 50:
+        if len(sentence_seps) > 2 and corr_words > 50:
             return False, "appears_to_be_evidence_passage"
 
         return True, ""

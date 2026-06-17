@@ -1,0 +1,63 @@
+{
+  "mode": "full",
+  "seed": 42,
+  "num_samples": 500,
+  "dataset_name": "ccdv/govreport-summarization",
+  "dataset_split": "validation",
+  "dataset_cache_dir": "./data_cache",
+  "summarizer_model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "summarizer_chunk_size": 2000,
+  "summarizer_chunk_overlap": 200,
+  "summarizer_max_summary_length": 300,
+  "summarizer_max_chunk_summary_length": 150,
+  "summarizer_num_beams": 4,
+  "consistency_nli_model": "facebook/bart-large-mnli",
+  "consistency_entailment_threshold": 0.5,
+  "consistency_evidence_top_k": 3,
+  "consistency_sentence_window": 3,
+  "consistency_evidence_mode": "tfidf",
+  "semantic_retrieval_model": "all-MiniLM-L6-v2",
+  "semantic_retrieval_batch_size": 32,
+  "semantic_retrieval_enabled": false,
+  "corrector_model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "corrector_max_new_tokens": 40,
+  "corrector_temperature": 0.0,
+  "corrector_num_beams": 3,
+  "corrector_max_length_ratio": 1.5,
+  "evaluation_rouge_types": [
+    "rouge1",
+    "rouge2",
+    "rougeL"
+  ],
+  "evaluation_use_stemmer": true,
+  "analysis_length_bins": [
+    [
+      0,
+      100
+    ],
+    [
+      100,
+      200
+    ],
+    [
+      200,
+      300
+    ],
+    [
+      300,
+      400
+    ],
+    [
+      400,
+      500
+    ],
+    [
+      500,
+      99999
+    ]
+  ],
+  "analysis_num_case_studies": 10,
+  "output_root_dir": "./results",
+  "output_save_intermediate": true,
+  "log_level": "INFO"
+}

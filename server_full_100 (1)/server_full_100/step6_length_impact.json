@@ -1,0 +1,38 @@
+{
+  "0-100": {
+    "num_samples": 113,
+    "avg_summary_words": 68.1,
+    "avg_consistency_rate": 0.6034,
+    "avg_error_rate": 0.3966,
+    "avg_rouge1_f": 0.1456,
+    "avg_rouge2_f": 0.0531,
+    "avg_rougeL_f": 0.095
+  },
+  "100-200": {
+    "num_samples": 187,
+    "avg_summary_words": 152.9,
+    "avg_consistency_rate": 0.6344,
+    "avg_error_rate": 0.3656,
+    "avg_rouge1_f": 0.2627,
+    "avg_rouge2_f": 0.0842,
+    "avg_rougeL_f": 0.1537
+  },
+  "200-300": {
+    "num_samples": 200,
+    "avg_summary_words": 230.6,
+    "avg_consistency_rate": 0.7627,
+    "avg_error_rate": 0.2373,
+    "avg_rouge1_f": 0.3493,
+    "avg_rouge2_f": 0.1112,
+    "avg_rougeL_f": 0.1766
+  },
+  "300-400": {
+    "num_samples": 0
+  },
+  "400-500": {
+    "num_samples": 0
+  },
+  "500+": {
+    "num_samples": 0
+  }
+}

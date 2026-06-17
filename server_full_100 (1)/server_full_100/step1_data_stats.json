@@ -1,0 +1,9 @@
+{
+  "num_samples": 500,
+  "avg_report_words": 8036.878,
+  "max_report_words": 54091,
+  "min_report_words": 173,
+  "avg_reference_summary_words": 566.446,
+  "max_reference_summary_words": 1398,
+  "min_reference_summary_words": 63
+}
