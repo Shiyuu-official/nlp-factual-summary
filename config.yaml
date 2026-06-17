@@ -38,7 +38,7 @@ defaults:
     model: Qwen/Qwen2.5-1.5B-Instruct
     nli_model: facebook/bart-large-mnli
     max_new_tokens: 100
-    num_candidates: 5                    # N diverse candidates per sentence
+    num_candidates: 8                    # N diverse candidates per sentence
     sample_temperature: 0.5              # >0 for diverse sampling (lower = more focused)
     max_refinement_rounds: 3             # iterative NLI-guided refinement
     max_length_ratio: 2.0                # reject if corrected > 2.0x original length

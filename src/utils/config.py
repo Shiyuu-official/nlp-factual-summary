@@ -41,7 +41,7 @@ class PipelineConfig:
     corrector_model: str = "Qwen/Qwen2.5-1.5B-Instruct"
     corrector_nli_model: str = "facebook/bart-large-mnli"
     corrector_max_new_tokens: int = 100
-    corrector_num_candidates: int = 5
+    corrector_num_candidates: int = 8
     corrector_sample_temperature: float = 0.5
     corrector_max_refinement_rounds: int = 3
     corrector_max_length_ratio: float = 2.0

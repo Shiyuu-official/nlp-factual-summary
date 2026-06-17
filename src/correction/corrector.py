@@ -38,19 +38,25 @@ GENERATION_PROMPT = """The sentence below makes claims NOT supported by the evid
 Fix ONLY the unsupported parts by replacing them with facts from the evidence.
 Keep all supported parts EXACTLY as they are.
 
+Example:
+Evidence: The DHS Assistant Secretary for Countering Weapons of Mass Destruction will coordinate with the Under Secretary for Strategy, Policy, and Plans.
+Original: The Assistant Secretary for CWMD will also coordinate with the DHS Under Secretary to develop a strategy and implementation plan.
+Corrected: The Assistant Secretary for Countering Weapons of Mass Destruction will coordinate with the DHS Under Secretary for Strategy, Policy, and Plans.
+
+Now fix this sentence:
+
 Evidence:
 {evidence}
 
-Original sentence (length: {orig_len} words):
+Original sentence (length: {orig_len} words, target ≤ {max_words} words):
 {sentence}
 
 Rules:
-- Return ONLY the corrected sentence — no explanation, no preamble.
-- Replace unsupported claims with facts that EXPLICITLY appear in the evidence.
-- Do NOT change phrases that are already supported by the evidence.
-- Do NOT add new entities, numbers, or relationships absent from the evidence.
-- Keep the corrected sentence SHORT — at most {max_words} words.
-- If a claim cannot be verified, remove it.
+- Return ONLY the corrected sentence — no explanation.
+- Replace unsupported claims with facts EXPLICITLY stated in the evidence.
+- Keep already-supported phrases UNCHANGED.
+- Remove claims not verifiable in the evidence.
+- Do NOT invent entities, numbers, or actions absent from the evidence.
 
 Corrected sentence:"""
 
@@ -192,6 +198,40 @@ class EvidenceConstrainedCorrector:
             logits = self._nli_model(**inputs).logits
             probs = torch.softmax(logits, dim=-1)
         return [round(probs[i][self._nli_entail_id].item(), 4) for i in range(len(hypotheses))]
+
+    # ── Evidence selection ────────────────────────────────────────────
+
+    def _select_best_evidence(self, sentence: str,
+                               evidences: List[Dict]) -> Tuple[str, float]:
+        """Select the evidence that is MOST useful for correction.
+
+        Strategy: run NLI on each evidence against the claim.  The evidence
+        with the LOWEST entailment score is the one that best exposes what's
+        wrong with the claim — it contains facts that contradict or fail to
+        support the claim, making it the ideal basis for correction.
+
+        Returns (best_evidence_text, entailment_score).
+        """
+        if not evidences:
+            return "", 0.0
+        if len(evidences) == 1:
+            return evidences[0].get("text", ""), 0.0
+
+        texts = [e.get("text", "") for e in evidences if e.get("text")]
+        if not texts:
+            return "", 0.0
+
+        self._ensure_nli()
+        # Score each evidence as premise against the claim as hypothesis.
+        # Lowest entailment → evidence best exposes the factual gap.
+        best_text = texts[0]
+        best_score = 1.0
+        for ev_text in texts:
+            score = self._nli_score(ev_text, sentence)
+            if score < best_score:
+                best_score = score
+                best_text = ev_text
+        return best_text, best_score
 
     # ── Step 1: Key evidence extraction ───────────────────────────────
 
@@ -679,11 +719,15 @@ class EvidenceConstrainedCorrector:
                 })
                 continue
 
-            best_ev = max(evidences, key=lambda e: e.get("score", 0))
+            # NLI-select the evidence that best reveals what's unsupported
+            best_ev_text, _ = self._select_best_evidence(sent["text"], evidences)
+            if not best_ev_text:
+                best_ev = max(evidences, key=lambda e: e.get("score", 0))
+                best_ev_text = best_ev["text"]
             # Pass all evidence texts for multi-evidence extractive search
             all_ev_texts = [e["text"] for e in evidences if e.get("text")]
             result = self.correct_single(
-                sent["text"], best_ev["text"],
+                sent["text"], best_ev_text,
                 all_evidences=all_ev_texts if len(all_ev_texts) > 1 else None,
             )
             result["sentence_index"] = sent["index"]
