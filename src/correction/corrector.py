@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 
 # ── Prompt templates ────────────────────────────────────────────────────
 
-GENERATION_PROMPT = """Rewrite the summary sentence so that EVERY fact is directly stated in the evidence below.
+GENERATION_PROMPT = """The sentence below makes claims NOT supported by the evidence.
+Fix ONLY the unsupported parts by replacing them with facts from the evidence.
+Keep all supported parts EXACTLY as they are.
 
 Evidence:
 {evidence}
@@ -44,11 +46,11 @@ Original sentence (length: {orig_len} words):
 
 Rules:
 - Return ONLY the corrected sentence — no explanation, no preamble.
-- Every fact (entity, number, action, relationship) must appear in the evidence.
-- Do NOT add information absent from the evidence.
-- Keep the corrected sentence SHORT — at most 1.5× the original length ({max_words} words).
-- If you cannot verify a claim in the evidence, remove it rather than guess.
-- Use complete, grammatical English.
+- Replace unsupported claims with facts that EXPLICITLY appear in the evidence.
+- Do NOT change phrases that are already supported by the evidence.
+- Do NOT add new entities, numbers, or relationships absent from the evidence.
+- Keep the corrected sentence SHORT — at most {max_words} words.
+- If a claim cannot be verified, remove it.
 
 Corrected sentence:"""
 
@@ -407,44 +409,65 @@ class EvidenceConstrainedCorrector:
 
         return best, best_score
 
-    # ── Step 5: Extractive fallback ───────────────────────────────────
+    # ── Step 5: Extractive fallback (NLI-driven) ──────────────────────
 
-    def _extractive_fallback(self, original: str, evidence_text: str) -> str:
-        """When generation cannot produce an evidence-backed correction,
-        fall back to extracting the evidence sentence most similar to the
-        original claim.
+    def _extractive_fallback(self, original: str, evidence_text: str) -> Tuple[str, float]:
+        """Extract the evidence sentence with highest NLI entailment score.
 
-        This guarantees that the output is factually grounded in the source.
+        Instead of word overlap (which may pick a sentence that doesn't
+        actually entail the correction target), we NLI-score every candidate
+        evidence sentence against the evidence context.  The winner is the
+        sentence most strongly entailed by the surrounding evidence.
+
+        Returns (best_sentence, nli_score).
         """
         doc_sentences = [
             s.strip() for s in re.split(r"(?<=[.!?])\s+", evidence_text) if s.strip()
         ]
         if not doc_sentences:
-            return original  # nothing to extract; keep original (will be flagged)
+            return original, 0.0
 
-        # Score each evidence sentence by word overlap with the original claim
         claim_tokens = _word_tokens(original)
         if not claim_tokens:
-            return original
+            return original, 0.0
 
-        best_sent = None
-        best_score = -1.0
-        for sent in doc_sentences:
-            score = _jaccard(claim_tokens, _word_tokens(sent))
-            # Penalize very short fragments
-            if len(sent.split()) < 4:
-                score *= 0.5
+        # Pre-filter: keep sentences with some word overlap with the claim,
+        # plus their immediate neighbors for context.  This avoids scoring
+        # totally unrelated sentences.
+        candidates = []
+        for i, sent in enumerate(doc_sentences):
+            overlap = _jaccard(claim_tokens, _word_tokens(sent))
+            if overlap > 0.0 and len(sent.split()) >= 4:
+                candidates.append((i, sent, overlap))
+
+        if not candidates:
+            # fall back to any non-trivial sentence
+            candidates = [
+                (i, s, 0.0) for i, s in enumerate(doc_sentences)
+                if len(s.split()) >= 4
+            ]
+
+        if not candidates:
+            return original, 0.0
+
+        # Sort by overlap and take top-8 to keep NLI calls bounded
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        candidates = candidates[:8]
+
+        # NLI-score each candidate against the full evidence context
+        best_sent = candidates[0][1]
+        best_score = 0.0
+        for _, sent, _ in candidates:
+            score = self._nli_score(evidence_text, sent)
             if score > best_score:
                 best_score = score
                 best_sent = sent
 
-        if best_sent and best_score > 0.0:
-            logger.debug(
-                f"Extractive fallback used: score={best_score:.3f}, "
-                f"sent=\"{best_sent[:80]}...\""
-            )
-            return best_sent
-        return original
+        logger.debug(
+            f"Extractive fallback: best NLI score={best_score:.3f}, "
+            f"sent=\"{best_sent[:80]}...\""
+        )
+        return best_sent, best_score
 
     # ── Validation ────────────────────────────────────────────────────
 
@@ -481,46 +504,89 @@ class EvidenceConstrainedCorrector:
 
     # ── Main correction entry point ───────────────────────────────────
 
-    def correct_single(self, sentence: str, evidence_text: str) -> Dict:
-        """Correct a single inconsistent sentence using the full pipeline.
+    def correct_single(self, sentence: str, evidence_text: str,
+                       all_evidences: Optional[List[str]] = None) -> Dict:
+        """Correct a single inconsistent sentence.
 
         Args:
             sentence: The inconsistent summary sentence.
-            evidence_text: Evidence passage from the source document.
+            evidence_text: Primary evidence passage (TF-IDF top-1).
+            all_evidences: All top-k evidence passages (optional, for
+                           multi-evidence extractive search).
 
         Returns dict with:
             original, corrected, success, evidence_used, failure_reason,
-            strategy (candidate|refinement|extractive), nli_score
+            strategy (extractive|candidate|refinement), nli_score
         """
         # Pre-validation
         if re.fullmatch(r"[\W_]+|\d+[.)]?", sentence.strip()):
             return self._fail(sentence, evidence_text, "invalid_original_sentence")
 
-        # Step 1: Extract key evidence sentence(s)
-        key_evidence = self._extract_key_evidence(sentence, evidence_text)
-        if not key_evidence or len(key_evidence.split()) < 4:
-            return self._fail(sentence, evidence_text, "insufficient_evidence")
+        evidence_pool = [evidence_text]
+        if all_evidences:
+            evidence_pool = list(all_evidences)
 
-        # Step 2: Generate multiple candidates
+        # ── Phase A: NLI-driven extractive across ALL evidences ─────
+        # Try extractive first — if an evidence sentence is already
+        # strongly entailed by its context, use it directly.
+        best_extractive = None
+        best_ext_score = 0.0
+        best_ext_ev = evidence_text
+        for ev_text in evidence_pool:
+            if not ev_text or len(ev_text.split()) < 4:
+                continue
+            extracted, score = self._extractive_fallback(sentence, ev_text)
+            if score > best_ext_score:
+                best_ext_score = score
+                best_extractive = extracted
+                best_ext_ev = ev_text
+
+        # If extractive already hits threshold, skip generation entirely
+        if (best_extractive and best_extractive != sentence.strip()
+                and best_ext_score >= self.entailment_threshold):
+            is_valid, reason = self._validate_correction(sentence, best_extractive)
+            if is_valid:
+                return self._success(
+                    sentence, best_extractive, best_ext_ev,
+                    "extractive", best_ext_score,
+                )
+
+        # ── Phase B: Generation with the most promising evidence ────
+        # Use the evidence that gave the best extractive score as the
+        # generation context (it has the most relevant content).
+        best_evidence = best_ext_ev
+        key_evidence = self._extract_key_evidence(sentence, best_evidence)
+        if not key_evidence or len(key_evidence.split()) < 4:
+            # If extractive found something usable but below threshold,
+            # accept it as a fallback
+            if best_extractive and best_extractive != sentence.strip():
+                is_valid, reason = self._validate_correction(sentence, best_extractive)
+                if is_valid:
+                    return self._success(
+                        sentence, best_extractive, best_ext_ev,
+                        "extractive", best_ext_score,
+                    )
+            return self._fail(sentence, best_evidence, "insufficient_evidence")
+
         candidates = self._generate_candidates(sentence, key_evidence)
         if not candidates:
-            # Fallback: try extraction directly
-            if self.enable_extractive_fallback:
-                extracted = self._extractive_fallback(sentence, key_evidence)
-                is_valid, reason = self._validate_correction(sentence, extracted)
+            if best_extractive and best_extractive != sentence.strip():
+                is_valid, reason = self._validate_correction(sentence, best_extractive)
                 if is_valid:
-                    return self._success(sentence, extracted, evidence_text,
-                                         "extractive", self._nli_score(key_evidence, extracted))
-            return self._fail(sentence, evidence_text, "no_candidates_generated")
+                    return self._success(
+                        sentence, best_extractive, best_ext_ev,
+                        "extractive", best_ext_score,
+                    )
+            return self._fail(sentence, best_evidence, "no_candidates_generated")
 
-        # Step 3: NLI scoring + select best candidate
+        # NLI scoring + select best candidate
         best, best_score = self._select_best(candidates, key_evidence, sentence)
         if best is None:
-            return self._fail(sentence, evidence_text, "all_candidates_rejected")
+            return self._fail(sentence, best_evidence, "all_candidates_rejected")
 
         strategy = "candidate"
 
-        # Step 4: Iterative refinement if below threshold
+        # Iterative refinement if below threshold
         if best_score < self.entailment_threshold and self.enable_refinement:
             refined, refined_score = self._refine(
                 sentence, key_evidence, best, best_score
@@ -530,21 +596,19 @@ class EvidenceConstrainedCorrector:
                 best_score = refined_score
                 strategy = "refinement"
 
-        # Step 5: Extractive fallback if still below threshold
-        if best_score < self.entailment_threshold and self.enable_extractive_fallback:
-            extracted = self._extractive_fallback(sentence, key_evidence)
-            extracted_score = self._nli_score(key_evidence, extracted)
-            if extracted_score > best_score:
-                best = extracted
-                best_score = extracted_score
+        # If generation still below threshold, try extractive again
+        if best_score < self.entailment_threshold and best_extractive is not None:
+            if best_ext_score > best_score:
+                best = best_extractive
+                best_score = best_ext_score
                 strategy = "extractive"
 
         # Validate format
         is_valid, reason = self._validate_correction(sentence, best)
         if not is_valid:
-            return self._fail(sentence, evidence_text, reason)
+            return self._fail(sentence, best_evidence, reason)
 
-        return self._success(sentence, best, evidence_text, strategy, best_score)
+        return self._success(sentence, best, best_evidence, strategy, best_score)
 
     def _success(self, original: str, corrected: str, evidence: str,
                  strategy: str, nli_score: float) -> Dict:
@@ -616,7 +680,12 @@ class EvidenceConstrainedCorrector:
                 continue
 
             best_ev = max(evidences, key=lambda e: e.get("score", 0))
-            result = self.correct_single(sent["text"], best_ev["text"])
+            # Pass all evidence texts for multi-evidence extractive search
+            all_ev_texts = [e["text"] for e in evidences if e.get("text")]
+            result = self.correct_single(
+                sent["text"], best_ev["text"],
+                all_evidences=all_ev_texts if len(all_ev_texts) > 1 else None,
+            )
             result["sentence_index"] = sent["index"]
             corrections.append(result)
 
