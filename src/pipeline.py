@@ -235,15 +235,31 @@ class Pipeline:
             max_new_tokens=self.config.corrector_max_new_tokens,
             temperature=self.config.corrector_temperature,
             num_beams=self.config.corrector_num_beams,
+            num_candidates=self.config.corrector_num_candidates,
             max_length_ratio=self.config.corrector_max_length_ratio,
             device=device,
         )
 
+        rerank_checker = None
+        if self.config.corrector_num_candidates > 1:
+            logger.info(
+                "Advanced correction enabled: %s candidates with NLI reranking",
+                self.config.corrector_num_candidates,
+            )
+            rerank_checker = NLIChecker(
+                model_name=self.config.consistency_nli_model,
+                entailment_threshold=self.config.consistency_entailment_threshold,
+                evidence_top_k=self.config.consistency_evidence_top_k,
+                device=device,
+            )
+
         results = corrector.correct_batch(
             samples,
+            nli_checker=rerank_checker,
             checkpoint_path=partial_path,
             existing_results=existing,
         )
+        del rerank_checker
         del corrector
         if device == "cuda":
             torch.cuda.empty_cache()

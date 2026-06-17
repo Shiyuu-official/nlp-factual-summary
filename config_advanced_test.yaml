@@ -1,8 +1,5 @@
-# NLP Factual Summary — Master Configuration
-# ============================================
-# Usage:
-#   python main.py --mode test    # 5 samples, fast validation
-#   python main.py --mode full    # 500+ samples, final experiment
+# Small-scale advanced correction test configuration.
+# Keeps the fast test profile, but enables multi-candidate NLI reranking.
 
 mode: test
 use_gpu: true
@@ -28,19 +25,20 @@ defaults:
     entailment_threshold: 0.5
     evidence_top_k: 3
     sentence_window: 3
-    evidence_mode: tfidf                 # "word_overlap", "tfidf", or "semantic"
+    evidence_mode: tfidf
 
   semantic_retrieval:
     model: all-MiniLM-L6-v2
     batch_size: 32
+    enabled: false
 
   corrector:
     model: Qwen/Qwen2.5-1.5B-Instruct
     max_new_tokens: 40
     temperature: 0.0
     num_beams: 3
-    num_candidates: 3                    # advanced: generate candidates, then rerank by NLI
-    max_length_ratio: 1.5                # reject if corrected > 1.5x original length
+    num_candidates: 3
+    max_length_ratio: 1.5
 
   evaluation:
     rouge_types: [rouge1, rouge2, rougeL]
@@ -63,7 +61,6 @@ defaults:
   logging:
     level: INFO
 
-# ── Test profile (fast development runs) ──────────────────────────
 test:
   num_samples: 2
   summarizer:
@@ -72,13 +69,13 @@ test:
     num_beams: 1
   corrector:
     max_new_tokens: 40
-    num_beams: 1
-    num_candidates: 1
+    num_beams: 3
+    num_candidates: 3
 
-# ── Full profile (final experiment) ───────────────────────────────
 full:
   num_samples: 500
   consistency:
-    evidence_mode: tfidf            # change to "semantic" for 进阶任务
+    evidence_mode: tfidf
   semantic_retrieval:
-    enabled: false                  # set to true for 进阶任务
+    enabled: false
+

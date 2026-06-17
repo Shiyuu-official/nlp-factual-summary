@@ -42,6 +42,7 @@ class PipelineConfig:
     corrector_max_new_tokens: int = 100
     corrector_temperature: float = 0.0
     corrector_num_beams: int = 3
+    corrector_num_candidates: int = 1
     corrector_max_length_ratio: float = 2.0
 
     # Evaluation
@@ -108,6 +109,7 @@ def _flatten_config(raw: dict) -> PipelineConfig:
         corrector_max_new_tokens=raw["corrector"]["max_new_tokens"],
         corrector_temperature=raw["corrector"]["temperature"],
         corrector_num_beams=raw["corrector"]["num_beams"],
+        corrector_num_candidates=raw["corrector"].get("num_candidates", 1),
         corrector_max_length_ratio=raw["corrector"]["max_length_ratio"],
         # Evaluation
         evaluation_rouge_types=raw["evaluation"]["rouge_types"],
